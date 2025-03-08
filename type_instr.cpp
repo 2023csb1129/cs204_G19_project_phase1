@@ -4,11 +4,10 @@
 #include <unordered_map>
 #include <bitset>
 #include <iomanip>
-#include <regex>
 
 using namespace std;
 
-// R-Type Instructions
+// **R-Type Instructions**
 struct RType
 {
     string opcode;
@@ -19,19 +18,10 @@ struct RType
 unordered_map<string, RType> rTypeInstructions = {
     {"add", {"0110011", "000", "0000000"}},
     {"sub", {"0110011", "000", "0100000"}},
-    {"and", {"0110011", "111", "0000000"}},
-    {"or", {"0110011", "110", "0000000"}},
-    {"xor", {"0110011", "100", "0000000"}},
-    {"sll", {"0110011", "001", "0000000"}},
-    {"srl", {"0110011", "101", "0000000"}},
-    {"sra", {"0110011", "101", "0100000"}},
-    {"slt", {"0110011", "010", "0000000"}},
     {"mul", {"0110011", "000", "0000001"}},
-    {"div", {"0110011", "100", "0000001"}},
-    {"rem", {"0110011", "110", "0000001"}},
 };
 
-// I-Type Instructions
+// **I-Type Instructions**
 struct IType
 {
     string opcode;
@@ -42,18 +32,21 @@ unordered_map<string, IType> iTypeInstructions = {
     {"addi", {"0010011", "000"}},
     {"andi", {"0010011", "111"}},
     {"ori", {"0010011", "110"}},
-    {"jalr", {"1100111", "000"}},
     {"lb", {"0000011", "000"}},
     {"lh", {"0000011", "001"}},
     {"lw", {"0000011", "010"}},
-    {"ld", {"0000011", "011"}},
 };
 
-// S-Type Instructions (Store)
+// **S-Type Instructions**
 unordered_map<string, string> sTypeInstructions = {
-    {"sb", "0100011"}, {"sh", "0100011"}, {"sw", "0100011"}, {"sd", "0100011"}};
+    {"sb", "0100011"}, {"sh", "0100011"}, {"sw", "0100011"}};
 
-// Function to clean token (remove trailing comma)
+// **U-Type Instructions**
+unordered_map<string, string> uTypeInstructions = {
+    {"lui", "0110111"},
+    {"auipc", "0010111"}};
+
+// **Utility Functions**
 string cleanToken(string token)
 {
     if (!token.empty() && token.back() == ',')
@@ -63,74 +56,63 @@ string cleanToken(string token)
     return token;
 }
 
-// Function to parse memory operand format: `32(x14)`
-bool parseMemoryOperand(string operand, string &immediate, string &rs1)
-{
-    regex memPattern(R"(([-]?\d+)\((x\d+)\))");
-    smatch match;
-    if (regex_match(operand, match, memPattern))
-    {
-        immediate = match[1].str();
-        rs1 = match[2].str();
-        return true;
-    }
-    return false;
-}
-
-// Function to convert register name (x0-x31) to binary
 string getRegisterBinary(string reg)
 {
     reg = cleanToken(reg);
-    if (reg.size() < 2 || reg[0] != 'x')
+    if (reg[0] != 'x')
         return "00000";
     return bitset<5>(stoi(reg.substr(1))).to_string();
 }
 
-// Function to convert immediate value (Fixed sign extension)
 string getImmediateBinary(string imm, int bits)
 {
-    int immValue = stoi(imm);
-    if (bits == 12)
-        return bitset<12>(immValue & 0xFFF).to_string();
-    else if (bits == 5)
-        return bitset<5>(immValue & 0x1F).to_string();
-    else
-        return bitset<32>(immValue).to_string();
+    return bitset<32>(stoi(imm)).to_string().substr(32 - bits, bits);
 }
 
-// Function to generate R-type machine code
+// **Machine Code Generation**
 string generateRType(string instr, string rd, string rs1, string rs2)
 {
     RType r = rTypeInstructions[instr];
-    return r.func7 + getRegisterBinary(rs2) + getRegisterBinary(rs1) + r.func3 + getRegisterBinary(rd) + r.opcode;
+    return r.func7 + getRegisterBinary(rs2) + getRegisterBinary(rs1) +
+           r.func3 + getRegisterBinary(rd) + r.opcode;
 }
 
-// Function to generate I-type machine code
 string generateIType(string instr, string rd, string rs1, string imm)
 {
-    IType i = iTypeInstructions[instr];
-    return getImmediateBinary(imm, 12) + getRegisterBinary(rs1) + i.func3 + getRegisterBinary(rd) + i.opcode;
+    return getImmediateBinary(imm, 12) + getRegisterBinary(rs1) +
+           iTypeInstructions[instr].func3 + getRegisterBinary(rd) +
+           iTypeInstructions[instr].opcode;
 }
 
-// Function to generate I-type Load machine code
-string generateITypeLoad(string instr, string rd, string rs1, string imm)
-{
-    return getImmediateBinary(imm, 12) + getRegisterBinary(rs1) + iTypeInstructions[instr].func3 + getRegisterBinary(rd) + iTypeInstructions[instr].opcode;
-}
-
-// Function to generate S-type machine code
 string generateSType(string instr, string rs2, string rs1, string imm)
 {
     string opcode = sTypeInstructions[instr];
     string immBinary = getImmediateBinary(imm, 12);
-    return immBinary.substr(0, 7) + getRegisterBinary(rs2) + getRegisterBinary(rs1) + "010" + immBinary.substr(7, 5) + opcode;
+    return immBinary.substr(0, 7) + getRegisterBinary(rs2) +
+           getRegisterBinary(rs1) + "010" + immBinary.substr(7, 5) + opcode;
 }
 
-// Main function
+string generateUType(string instr, string rd, string imm)
+{
+    return getImmediateBinary(imm, 20) + getRegisterBinary(rd) + uTypeInstructions[instr];
+}
+
+// **Main Function**
 int main()
 {
-    ifstream input("input.asm");
+    ifstream input("input.txt"); // 🔹 Changed input file to input.txt
     ofstream output("output.mc");
+
+    if (!input.is_open())
+    {
+        cerr << " ERROR: Unable to open input.txt!" << endl;
+        return 1;
+    }
+    if (!output.is_open())
+    {
+        cerr << " ERROR: Unable to create output.mc!" << endl;
+        return 1;
+    }
 
     string line;
     int address = 0;
@@ -138,68 +120,67 @@ int main()
     while (getline(input, line))
     {
         istringstream iss(line);
-        string instr, rd, rs1, rs2, imm, operand;
-        string machineCode;
-
+        string instr, rd, rs1, rs2, imm, operand, machineCode;
         iss >> instr;
+
         if (instr.empty() || instr[0] == '#' || instr == ".text" || instr == ".data")
             continue;
 
-        cout << "DEBUG: Processing instruction: " << instr << endl;
-
+        // **Handling R-Type Instructions**
         if (rTypeInstructions.count(instr))
         {
             iss >> rd >> rs1 >> rs2;
-            rd = cleanToken(rd);
-            rs1 = cleanToken(rs1);
-            rs2 = cleanToken(rs2);
-            cout << "DEBUG: R-Type " << instr << " - rd=" << rd << ", rs1=" << rs1 << ", rs2=" << rs2 << endl;
-            machineCode = generateRType(instr, rd, rs1, rs2);
+            machineCode = generateRType(instr, cleanToken(rd), cleanToken(rs1), cleanToken(rs2));
         }
+
+        // **Handling I-Type Instructions**
         else if (iTypeInstructions.count(instr))
         {
-            if (instr == "lb" || instr == "lh" || instr == "lw" || instr == "ld")
+            iss >> rd >> operand;
+            size_t pos = operand.find('(');
+            if (pos != string::npos)
             {
-                iss >> rd >> operand;
-                rd = cleanToken(rd);
-                if (!parseMemoryOperand(operand, imm, rs1))
-                {
-                    cerr << "ERROR: Invalid memory format in " << line << endl;
-                    continue;
-                }
-                cout << "DEBUG: I-Type LOAD " << instr << " - rd=" << rd << ", rs1=" << rs1 << ", imm=" << imm << endl;
-                machineCode = generateITypeLoad(instr, rd, rs1, imm);
+                imm = operand.substr(0, pos);
+                rs1 = operand.substr(pos + 1, operand.find(')') - pos - 1);
             }
             else
             {
-                iss >> rd >> rs1 >> imm;
-                rd = cleanToken(rd);
-                rs1 = cleanToken(rs1);
-                cout << "DEBUG: I-Type " << instr << " - rd=" << rd << ", rs1=" << rs1 << ", imm=" << imm << endl;
-                machineCode = generateIType(instr, rd, rs1, imm);
+                rs1 = operand;
+                iss >> imm;
             }
+            machineCode = generateIType(instr, cleanToken(rd), cleanToken(rs1), cleanToken(imm));
         }
+
+        // **Handling S-Type (Store) Instructions**
         else if (sTypeInstructions.count(instr))
         {
             iss >> rs2 >> operand;
-            rs2 = cleanToken(rs2);
-            if (!parseMemoryOperand(operand, imm, rs1))
+            size_t pos = operand.find('(');
+            if (pos != string::npos)
             {
-                cerr << "ERROR: Invalid memory format in " << line << endl;
-                continue;
+                imm = operand.substr(0, pos);
+                rs1 = operand.substr(pos + 1, operand.find(')') - pos - 1);
+                machineCode = generateSType(instr, cleanToken(rs2), cleanToken(rs1), cleanToken(imm));
             }
-            cout << "DEBUG: S-Type STORE " << instr << " - rs2=" << rs2 << ", rs1=" << rs1 << ", imm=" << imm << endl;
-            machineCode = generateSType(instr, rs2, rs1, imm);
-        }
-        else
-        {
-            cerr << "ERROR: Unsupported instruction: " << instr << endl;
-            continue;
         }
 
-        output << "0x" << hex << address << " 0x" << hex << stoul(machineCode, nullptr, 2) << " , " << line << " # " << machineCode << endl;
+        // **Handling U-Type Instructions**
+        else if (uTypeInstructions.count(instr))
+        {
+            iss >> rd >> imm;
+            machineCode = generateUType(instr, cleanToken(rd), cleanToken(imm));
+        }
+
+        // **Write to Output File**
+        if (!machineCode.empty())
+        {
+            output << "0x" << hex << address << " 0x" << hex << stoul(machineCode, nullptr, 2)
+                   << " , " << line << " # " << machineCode << endl;
+        }
+
         address += 4;
     }
 
+    cout << "Conversion completed! Check output.mc" << endl;
     return 0;
 }

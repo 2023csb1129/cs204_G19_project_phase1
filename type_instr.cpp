@@ -10,15 +10,16 @@
 
 using namespace std;
 
-// --------------------- Instruction Maps --------------------- //
-// R-Type Instructions
-struct RType
+// this is for storing the opcode, funct3, and funct7 for R-type instucrtions
+struct R_t
 {
-    string opcode;
-    string func3;
-    string func7;
+    string op;
+    string f3;
+    string f7;
 };
-unordered_map<string, RType> rTypeInstructions = {
+
+// here we are matching r-type instructions with their respcetive binary notations
+unordered_map<string, R_t> instrmap_r = {
     {"add", {"0110011", "000", "0000000"}},
     {"sub", {"0110011", "000", "0100000"}},
     {"mul", {"0110011", "000", "0000001"}},
@@ -32,13 +33,15 @@ unordered_map<string, RType> rTypeInstructions = {
     {"sra", {"0110011", "101", "0100000"}},
     {"slt", {"0110011", "010", "0000000"}}};
 
-// I-Type Instructions
-struct IType
+// this is for storing the opcode and funct3 for I-type instructions
+struct I_t
 {
-    string opcode;
-    string func3;
+    string op;
+    string f3;
 };
-unordered_map<string, IType> iTypeInstructions = {
+
+// as mentioned for above that is for r-type instructions similarly do here for i-type .
+unordered_map<string, I_t> instrmap_i = {
     {"addi", {"0010011", "000"}},
     {"andi", {"0010011", "111"}},
     {"ori", {"0010011", "110"}},
@@ -48,44 +51,47 @@ unordered_map<string, IType> iTypeInstructions = {
     {"ld", {"0000011", "011"}},
     {"jalr", {"1100111", "000"}}};
 
-// S-Type (Store) Instructions
-unordered_map<string, string> sTypeInstructions = {
-    {"sb", "0100011"}, {"sh", "0100011"}, {"sw", "0100011"}, {"sd", "0100011"}};
-
-// SB-Type (Branch) Instructions
-struct SBType
+// storing the opcode and funct3 for branch instructions
+struct B_t
 {
-    string opcode;
-    string func3;
+    string op;
+    string f3;
 };
-unordered_map<string, SBType> sbTypeInstructions = {
+
+// again here mapping branch instructions.
+unordered_map<string, B_t> instrmap_br = {
     {"beq", {"1100011", "000"}},
     {"bne", {"1100011", "001"}},
     {"bge", {"1100011", "101"}},
     {"blt", {"1100011", "100"}}};
 
-// U-Type Instructions (lui, auipc)
-unordered_map<string, string> uTypeInstructions = {
+// Mapping for store instructions (S-type); allof them use the same opcode.
+unordered_map<string, string> instrmap_st = {
+    {"sb", "0100011"}, {"sh", "0100011"}, {"sw", "0100011"}, {"sd", "0100011"}};
+
+// Mapping for UJ-type instructions here jal
+unordered_map<string, string> instrmap_uj = {
+    {"jal", "1101111"}};
+
+// Mapping for U-type instructions like lui and auipc
+unordered_map<string, string> instrmap_u = {
     {"lui", "0110111"},
     {"auipc", "0010111"}};
 
-// UJ-Type Instructions (jal)
-unordered_map<string, string> ujTypeInstructions = {
-    {"jal", "1101111"}};
-
-// ------------------ Utility Functions ------------------ //
-string cleanToken(string token)
+// Removes the last character from a string if it is a comma
+string rm_comma(string tok)
 {
-    if (!token.empty() && token.back() == ',')
+    if (!tok.empty() && tok.back() == ',')
     {
-        token.pop_back();
+        tok.pop_back();
     }
-    return token;
+    return tok;
 }
 
-string getRegisterBinary(string reg)
+// Converts a register string to a 5-bit binary notation.
+string reg_bin(string reg)
 {
-    reg = cleanToken(reg);
+    reg = rm_comma(reg);
     if (reg.empty() || reg[0] != 'x')
     {
         cerr << "ERROR: Invalid register format: " << reg << endl;
@@ -93,8 +99,8 @@ string getRegisterBinary(string reg)
     }
     try
     {
-        int regNum = stoi(reg.substr(1));
-        return bitset<5>(regNum).to_string();
+        int rn = stoi(reg.substr(1));
+        return bitset<5>(rn).to_string();
     }
     catch (...)
     {
@@ -102,14 +108,15 @@ string getRegisterBinary(string reg)
         return "00000";
     }
 }
+// Creates a binary string with the given bit-width from the then value string.
+// Represents negative numbers using the two's complement.
 
-string getImmediateBinary(string imm, int bits)
+string imm_bin(string imm, int bits)
 {
     try
     {
-        int immValue = stoi(imm);
-        // Convert to unsigned using two's complement for negative values.
-        unsigned int uVal = static_cast<unsigned int>(immValue) & ((1u << bits) - 1);
+        int immVal = stoi(imm);
+        unsigned int uVal = static_cast<unsigned int>(immVal) & ((1u << bits) - 1);
         return bitset<32>(uVal).to_string().substr(32 - bits, bits);
     }
     catch (...)
@@ -119,124 +126,85 @@ string getImmediateBinary(string imm, int bits)
     }
 }
 
-// ------------------ Instruction Encoding Functions ------------------ //
-string generateRType(string instr, string rd, string rs1, string rs2)
+// Converts an R-type instruction to its binary form in 32 bits.
+string enc_r(string ins, string rd, string rs1, string rs2)
 {
-    RType r = rTypeInstructions[instr];
-    return r.func7 + getRegisterBinary(rs2) + getRegisterBinary(rs1) +
-           r.func3 + getRegisterBinary(rd) + r.opcode;
+    R_t r = instrmap_r[ins];
+    return r.f7 + reg_bin(rs2) + reg_bin(rs1) +
+           r.f3 + reg_bin(rd) + r.op;
 }
 
-string generateIType(string instr, string rd, string rs1, string imm)
+// same for U-type instruction.
+string enc_u(string ins, string rd, string imm)
 {
-    return getImmediateBinary(imm, 12) + getRegisterBinary(rs1) +
-           iTypeInstructions[instr].func3 + getRegisterBinary(rd) +
-           iTypeInstructions[instr].opcode;
+    return imm_bin(imm, 20) + reg_bin(rd) + instrmap_u[ins];
 }
 
-string generateSType(string instr, string rs2, string rs1, string imm)
+// I-type instruction.
+string enc_i(string ins, string rd, string rs1, string imm)
 {
-    string opcode = sTypeInstructions[instr];
-    string immBinary = getImmediateBinary(imm, 12);
-    string imm11_5 = immBinary.substr(0, 7);
-    string imm4_0 = immBinary.substr(7, 5);
-
-    string func3;
-    if (instr == "sb")
-        func3 = "000";
-    if (instr == "sh")
-        func3 = "001";
-    if (instr == "sw")
-        func3 = "010";
-    if (instr == "sd")
-        func3 = "011";
-
-    return imm11_5 + getRegisterBinary(rs2) + getRegisterBinary(rs1) +
-           func3 + imm4_0 + opcode;
+    return imm_bin(imm, 12) + reg_bin(rs1) +
+           instrmap_i[ins].f3 + reg_bin(rd) +
+           instrmap_i[ins].op;
 }
 
-string generateSBType(string instr, string rs1, string rs2, string imm)
+// SB-type instruction therse are branch instructions
+string enc_br(string ins, string rs1, string rs2, string imm)
 {
-    SBType sb = sbTypeInstructions[instr];
-    string immBinary = getImmediateBinary(imm, 13);
-    // RISC-V branch encoding: imm[12] | imm[10:5] | rs2 | rs1 | func3 | imm[4:1] | imm[11] | opcode
-    return string(1, immBinary[0]) + immBinary.substr(2, 6) + getRegisterBinary(rs2) +
-           getRegisterBinary(rs1) + sb.func3 + immBinary.substr(8, 4) +
-           string(1, immBinary[1]) + sb.opcode;
+    B_t br = instrmap_br[ins];
+    string immB = imm_bin(imm, 13);
+    return string(1, immB[0]) + immB.substr(2, 6) + reg_bin(rs2) +
+           reg_bin(rs1) + br.f3 + immB.substr(8, 4) +
+           string(1, immB[1]) + br.op;
+}
+// Encodes a UJ-type instruction.
+string enc_uj(string ins, string rd, string imm)
+{
+    int off = stoi(imm);
+    uint32_t imm21 = static_cast<uint32_t>(off) & ((1u << 21) - 1);
+    uint32_t b20 = (imm21 >> 20) & 0x1;
+    uint32_t b10_1 = (imm21 >> 1) & 0x3FF;
+    uint32_t b11 = (imm21 >> 11) & 0x1;
+    uint32_t b19_12 = (imm21 >> 12) & 0xFF;
+    int rn = stoi(rd.substr(1));
+    uint32_t mc = (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12) | (rn << 7) | 0x6F;
+    return bitset<32>(mc).to_string();
 }
 
-string generateUType(string instr, string rd, string imm)
+// S-type instruction-store instructions
+string enc_st(string ins, string rs2, string rs1, string imm)
 {
-    return getImmediateBinary(imm, 20) + getRegisterBinary(rd) + uTypeInstructions[instr];
+    string opcd = instrmap_st[ins];
+    string immB = imm_bin(imm, 12);
+    string imm11_5 = immB.substr(0, 7);
+    string imm4_0 = immB.substr(7, 5);
+    string f3;
+    if (ins == "sb")
+        f3 = "000";
+    if (ins == "sh")
+        f3 = "001";
+    if (ins == "sw")
+        f3 = "010";
+    if (ins == "sd")
+        f3 = "011";
+    return imm11_5 + reg_bin(rs2) + reg_bin(rs1) +
+           f3 + imm4_0 + opcd;
 }
-
-string generateUJType(string instr, string rd, string imm)
+// Use an enum to differentiate between the assembly file's portions.
+enum seg_t
 {
-    // Use the full byte offset (e.g. for a forward jump from address 0x0 to 0x8, offset = 8,
-    // for a backward jump from 0x4 to 0x0, offset = -4)
-    int offset = stoi(imm);
-    // Convert to a 21-bit two's complement value.
-    uint32_t imm21 = static_cast<uint32_t>(offset) & ((1u << 21) - 1);
-
-    // Extract fields according to the JAL format:
-    //   imm[20]    -> bit 31
-    //   imm[10:1]  -> bits 30:21
-    //   imm[11]    -> bit 20
-    //   imm[19:12] -> bits 19:12
-    uint32_t bit20 = (imm21 >> 20) & 0x1;
-    uint32_t bits10_1 = (imm21 >> 1) & 0x3FF;
-    uint32_t bit11 = (imm21 >> 11) & 0x1;
-    uint32_t bits19_12 = (imm21 >> 12) & 0xFF;
-
-    int rdNum = stoi(rd.substr(1));
-    uint32_t machineCode = (bit20 << 31) |
-                           (bits10_1 << 21) |
-                           (bit11 << 20) |
-                           (bits19_12 << 12) |
-                           (rdNum << 7) |
-                           0x6F; // opcode for jal
-    return bitset<32>(machineCode).to_string();
-}
-
-/*string generateUJType(string instr, string rd, string imm) {
-    int immValue = stoi(imm);
-    // Extract fields according to RISC‑V JAL encoding:
-    // The jump offset (imm) is a 21-bit signed value.
-    // The encoded immediate is arranged as:
-    //   imm[20]   : bit31
-    //   imm[10:1] : bits30-21
-    //   imm[11]   : bit20
-    //   imm[19:12]: bits19-12
-    int imm20    = (immValue >> 20) & 0x1;
-    int imm10_1  = (immValue >> 1) & 0x3FF;  // 10 bits for bits 10:1
-    int imm11    = (immValue >> 11) & 0x1;
-    int imm19_12 = (immValue >> 12) & 0xFF;   // 8 bits for bits 19:12
-
-    // Now build the 32-bit machine code using bit shifts:
-    // rd is extracted from the register number (assume rd is like "x0")
-    int rdNum = stoi(rd.substr(1));
-    unsigned int machineCode = (imm20    << 31) |
-                               (imm10_1  << 21) |
-                               (imm11    << 20) |
-                               (imm19_12 << 12) |
-                               (rdNum    << 7)  |
-                                0x6F;  // opcode for jal
-    // Convert machine code to an 8-digit hexadecimal string
-    return bitset<32>(machineCode).to_string();
-}
-*/
-
-// ------------------ Label & Directive Support ------------------ //
-enum Segment
-{
-    NONE,
-    TEXT,
-    DATA
+    seg_none,
+    seg_txt,
+    seg_dat
 };
-unordered_map<string, unsigned int> symbolTable; // label -> absolute address
-vector<string> fileLines;                        // stores all lines for two-pass processing
 
-bool isNumber(const string &s)
+// Map to store label addresses.
+unordered_map<string, unsigned int> lbl_map;
+// All lines from the input assembly file are stored in a vector.
+vector<string> asm_lines;
+
+// Checks if a string represents a numeric value.
+bool is_num(const string &s)
 {
     if (s.empty())
         return false;
@@ -248,408 +216,436 @@ bool isNumber(const string &s)
     }
     return true;
 }
-// --- New Helper Functions for Trimming and Parsing Data Values --- //
 
-// Trim leading and trailing whitespace from a string.
-string trim(const string &s)
+// Removes whitespace from a string's leading and trailing characters.
+string trim_str(const string &s)
 {
-    size_t start = s.find_first_not_of(" \t\n\r");
-    if (start == string::npos)
+    size_t st = s.find_first_not_of(" \t\n\r");
+    if (st == string::npos)
         return "";
-    size_t end = s.find_last_not_of(" \t\n\r");
-    return s.substr(start, end - start + 1);
+    size_t en = s.find_last_not_of(" \t\n\r");
+    return s.substr(st, en - st + 1);
 }
-unsigned int parseDataDirectiveValue(const string &token)
+// Returns an unsigned int after parsing a directive value (such as a.byte value).
+unsigned int parse_val(const string &tok)
 {
-    string trimmed = trim(token);
+    string t = trim_str(tok);
     unsigned int val = 0;
-    if (trimmed.substr(0, 2) == "0x" || trimmed.substr(0, 2) == "0X")
-        val = stoul(trimmed, nullptr, 16);
+    if (t.substr(0, 2) == "0x" || t.substr(0, 2) == "0X")
+        val = stoul(t, nullptr, 16);
     else
-        val = stoul(trimmed);
+        val = stoul(t);
     return val;
 }
 
-// ------------------ Main Function ------------------ //
 int main()
 {
-    ifstream input("input.asm");
-    if (!input)
+    // Open the input assembly file.
+    ifstream in("input.asm");
+    if (!in)
     {
-        cerr << "Could not open input.asm" << endl;
+        cerr << "Error: Unable to open input.asm" << endl;
         return 1;
     }
 
-    // Read all lines from input.asm
-    string line;
-    while (getline(input, line))
+    // Read each line from the assembly file and store them in the asm_lines vector.
+    string cl;
+    while (getline(in, cl))
     {
-        fileLines.push_back(line);
+        asm_lines.push_back(cl);
     }
-    input.close();
-
-    // First Pass: Build symbol table and compute addresses.
-    Segment currSegment = NONE;
-    unsigned int currAddress = 0;
-    for (auto &l : fileLines)
+    in.close();
+    // First,calculate addresses and construct the label map.
+    //  To find the location of each label, we read each line.
+    seg_t cur_seg = seg_none;
+    unsigned int cur_addr = 0;
+    for (auto &ln : asm_lines)
     {
-        if (l.empty() || l[0] == '#')
+        if (ln.empty() || ln[0] == '#')
             continue;
-        istringstream iss(l);
-        string token;
-        iss >> token;
-        // Pointer to current stream.
-        istringstream *currStream = &iss;
-        string directivePart;
-        if (token.back() == ':')
+        istringstream ls(ln);
+        string tok;
+        ls >> tok;
+        istringstream *p_ls = &ls;
+        string extra;
+        // Check if the line starts with a label.
+        if (tok.back() == ':')
         {
-            string label = token.substr(0, token.size() - 1);
-            symbolTable[label] = currAddress;
-            getline(iss, directivePart);
-            if (directivePart.empty())
+            string lbl = tok.substr(0, tok.size() - 1);
+            lbl_map[lbl] = cur_addr; // Save the address of the label.
+            getline(ls, extra);
+            if (extra.empty())
                 continue;
-            // Use a new stream for the rest of the line.
-            currStream = new istringstream(directivePart);
-            (*currStream) >> token;
+            p_ls = new istringstream(extra);
+            (*p_ls) >> tok;
         }
-        if (token == ".text")
+        // Set the segment type and base addresses.
+        if (tok == ".text")
         {
-            currSegment = TEXT;
-            currAddress = 0;
+            cur_seg = seg_txt;
+            cur_addr = 0;
         }
-        else if (token == ".data")
+        else if (tok == ".data")
         {
-            currSegment = DATA;
-            currAddress = 0x10000000;
+            cur_seg = seg_dat;
+            cur_addr = 0x10000000;
         }
-        else if (currSegment == TEXT)
+        else if (cur_seg == seg_txt)
         {
-            // Each text instruction is 4 bytes.
-            currAddress += 4;
+            cur_addr += 4; // Each instruction is 4 bytes.
         }
-        else if (currSegment == DATA)
+        else if (cur_seg == seg_dat)
         {
-            if (token == ".byte")
+            // data----add the size of each directive we are taking.
+            if (tok == ".byte")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (!value.empty())
-                        currAddress += 1;
+                    if (!v.empty())
+                        cur_addr += 1;
                 }
             }
-            else if (token == ".half")
+            else if (tok == ".half")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (!value.empty())
-                        currAddress += 2;
+                    if (!v.empty())
+                        cur_addr += 2;
                 }
             }
-            else if (token == ".word")
+            else if (tok == ".word")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (!value.empty())
-                        currAddress += 4;
+                    if (!v.empty())
+                        cur_addr += 4;
                 }
             }
-            else if (token == ".dword")
+            else if (tok == ".dword")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (!value.empty())
-                        currAddress += 8;
+                    if (!v.empty())
+                        cur_addr += 8;
                 }
             }
-            else if (token == ".asciz")
+            else if (tok == ".asciz")
             {
                 string str;
-                getline(*currStream, str);
-                size_t start = str.find('\"');
-                size_t end = str.rfind('\"');
-                if (start != string::npos && end != string::npos && end > start)
+                getline(*p_ls, str);
+                size_t st = str.find('\"');
+                size_t en = str.rfind('\"');
+                if (st != string::npos && en != string::npos && en > st)
                 {
-                    string content = str.substr(start + 1, end - start - 1);
-                    currAddress += content.size() + 1;
+                    string content = str.substr(st + 1, en - st - 1);
+                    cur_addr += content.size() + 1;
                 }
             }
         }
-        if (currStream != &iss)
-            delete currStream;
+        if (p_ls != &ls)
+            delete p_ls;
     }
-
-    // Second Pass: Generate output code (text and data segments)
-    ofstream output("output.mc");
-    if (!output)
+    // Second work iswe use the assembly to create the machine code.
+    // Each line is processed by this loop, which converts data and instructions into machine code.
+    ofstream out("output.mc");
+    if (!out)
     {
-        cerr << "Could not open output.mc for writing" << endl;
+        cerr << "Error: Unable to open output.mc for writing" << endl;
         return 1;
     }
+    cur_seg = seg_none;
+    unsigned int txt_base = 0;
+    unsigned int dat_base = 0x10000000;
+    unsigned int cur_txt = 0;
+    unsigned int cur_dat = dat_base;
+    bool txt_done = false;
+    vector<string> txt_lines;
+    vector<string> dat_lines;
 
-    currSegment = NONE;
-    unsigned int textAddr = 0;          // text segment starting address
-    unsigned int dataAddr = 0x10000000; // data segment starting address
-    unsigned int currTextAddr = 0;
-    unsigned int currDataAddr = dataAddr;
-    bool textSegmentEnded = false;
-
-    vector<string> textOutput;
-    vector<string> dataOutput;
-
-    for (auto &l : fileLines)
+    for (auto &ln : asm_lines)
     {
-        if (l.empty() || l[0] == '#')
+        if (ln.empty() || ln[0] == '#')
             continue;
-        istringstream iss(l);
-        string token;
-        iss >> token;
-        istringstream *currStream = &iss;
-        string directivePart;
-        if (token.back() == ':')
+        istringstream ls(ln);
+        string tok;
+        ls >> tok;
+        istringstream *p_ls = &ls;
+        string extra;
+        // If the line starts with a label, adjust the stream.
+        if (tok.back() == ':')
         {
-            // Remove label.
-            getline(iss, directivePart);
-            if (directivePart.empty())
+            getline(ls, extra);
+            if (extra.empty())
                 continue;
-            currStream = new istringstream(directivePart);
-            (*currStream) >> token;
+            p_ls = new istringstream(extra);
+            (*p_ls) >> tok;
         }
-
-        if (token == ".text")
+        // Switch segment if there is a need.
+        if (tok == ".text")
         {
-            currSegment = TEXT;
-            currTextAddr = 0;
+            cur_seg = seg_txt;
+            cur_txt = 0;
             continue;
         }
-        else if (token == ".data")
+        else if (tok == ".data")
         {
-            if (currSegment == TEXT && !textSegmentEnded)
+            if (cur_seg == seg_txt && !txt_done)
             {
-                // Termination code for text segment.
                 ostringstream oss;
-                oss << "0x" << hex << currTextAddr << " 0xFFFFFFFF , END";
-                textOutput.push_back(oss.str());
-                textSegmentEnded = true;
+                oss << "0x" << hex << cur_txt << " 0xFFFFFFFF , END";
+                txt_lines.push_back(oss.str());
+                txt_done = true;
             }
-            currSegment = DATA;
-            currDataAddr = dataAddr;
+            cur_seg = seg_dat;
+            cur_dat = dat_base;
             continue;
         }
-
-        if (currSegment == TEXT)
+        // Process instructions in the text segment.
+        if (cur_seg == seg_txt)
         {
-            string machineCode;
-            if (rTypeInstructions.count(token))
+            string mc;
+            string bin_cmt;
+            if (instrmap_r.count(tok))
             {
                 string rd, rs1, rs2;
-                (*currStream) >> rd >> rs1 >> rs2;
-                machineCode = generateRType(token, cleanToken(rd), cleanToken(rs1), cleanToken(rs2));
+                (*p_ls) >> rd >> rs1 >> rs2;
+                mc = enc_r(tok, rm_comma(rd), rm_comma(rs1), rm_comma(rs2));
+                R_t r = instrmap_r[tok];
+                bin_cmt = r.op + "-" + r.f3 + "-" + r.f7 + "-" +
+                          reg_bin(rm_comma(rd)) + "-" +
+                          reg_bin(rm_comma(rs1)) + "-" +
+                          reg_bin(rm_comma(rs2)) + "-NULL";
             }
-            else if (iTypeInstructions.count(token))
+            else if (instrmap_i.count(tok))
             {
-                string rd, operand;
-                (*currStream) >> rd >> operand;
+                string rd, opr;
+                (*p_ls) >> rd >> opr;
                 string imm, rs1;
-                size_t pos = operand.find('(');
+                size_t pos = opr.find('(');
                 if (pos != string::npos)
                 {
-                    imm = operand.substr(0, pos);
-                    rs1 = operand.substr(pos + 1, operand.find(')') - pos - 1);
+                    imm = opr.substr(0, pos);
+                    rs1 = opr.substr(pos + 1, opr.find(')') - pos - 1);
                 }
                 else
                 {
-                    rs1 = operand;
-                    (*currStream) >> imm;
+                    rs1 = opr;
+                    (*p_ls) >> imm;
                 }
-                machineCode = generateIType(token, cleanToken(rd), cleanToken(rs1), cleanToken(imm));
+                mc = enc_i(tok, rm_comma(rd), rm_comma(rs1), rm_comma(imm));
+                I_t it = instrmap_i[tok];
+                string immB = imm_bin(rm_comma(imm), 12);
+                bin_cmt = it.op + "-" + it.f3 + "-NULL-" +
+                          reg_bin(rm_comma(rd)) + "-" +
+                          reg_bin(rm_comma(rs1)) + "-" + immB;
             }
-            else if (sTypeInstructions.count(token))
+            else if (instrmap_st.count(tok))
             {
-                string rs2, operand;
-                (*currStream) >> rs2 >> operand;
+                string rs2, opr;
+                (*p_ls) >> rs2 >> opr;
                 string imm, rs1;
-                size_t pos = operand.find('(');
+                size_t pos = opr.find('(');
                 if (pos != string::npos)
                 {
-                    imm = operand.substr(0, pos);
-                    rs1 = operand.substr(pos + 1, operand.find(')') - pos - 1);
+                    imm = opr.substr(0, pos);
+                    rs1 = opr.substr(pos + 1, opr.find(')') - pos - 1);
                 }
-                machineCode = generateSType(token, cleanToken(rs2), cleanToken(rs1), cleanToken(imm));
+                mc = enc_st(tok, rm_comma(rs2), rm_comma(rs1), rm_comma(imm));
+                string immB = imm_bin(rm_comma(imm), 12);
+                string f3;
+                if (tok == "sb")
+                    f3 = "000";
+                if (tok == "sh")
+                    f3 = "001";
+                if (tok == "sw")
+                    f3 = "010";
+                if (tok == "sd")
+                    f3 = "011";
+                bin_cmt = instrmap_st[tok] + "-" + f3 + "-NULL-NULL-" +
+                          reg_bin(rm_comma(rs1)) + "-" +
+                          reg_bin(rm_comma(rs2)) + "-" + immB;
             }
-            else if (sbTypeInstructions.count(token))
+            else if (instrmap_br.count(tok))
             {
                 string rs1, rs2, imm;
-                (*currStream) >> rs1 >> rs2 >> imm;
-                // Compute PC-relative offset for branch (divide by 2)
-                // For branch instructions (SB-type)
-                if (!isNumber(imm))
+                (*p_ls) >> rs1 >> rs2 >> imm;
+                if (!is_num(imm))
                 {
-                    int offset = symbolTable[imm] - currTextAddr; // use full byte offset
-                    imm = to_string(offset);
+                    int off = lbl_map[imm] - (cur_txt + 4);
+                    imm = to_string(off);
                 }
-
-                machineCode = generateSBType(token, cleanToken(rs1), cleanToken(rs2), cleanToken(imm));
+                mc = enc_br(tok, rm_comma(rs1), rm_comma(rs2), rm_comma(imm));
+                string immB = imm_bin(rm_comma(imm), 13);
+                B_t br = instrmap_br[tok];
+                bin_cmt = br.op + "-" + br.f3 + "-NULL-NULL-" +
+                          reg_bin(rm_comma(rs1)) + "-" +
+                          reg_bin(rm_comma(rs2)) + "-" + immB;
             }
-            else if (uTypeInstructions.count(token))
+            else if (instrmap_u.count(tok))
             {
                 string rd, imm;
-                (*currStream) >> rd >> imm;
-                machineCode = generateUType(token, cleanToken(rd), cleanToken(imm));
+                (*p_ls) >> rd >> imm;
+                mc = enc_u(tok, rm_comma(rd), rm_comma(imm));
+                string immB = imm_bin(rm_comma(imm), 20);
+                bin_cmt = instrmap_u[tok] + "-NULL-NULL-" +
+                          reg_bin(rm_comma(rd)) + "-NULL-" + immB;
             }
-
-            else if (ujTypeInstructions.count(token))
+            else if (instrmap_uj.count(tok))
             {
-                string rd, label;
-                iss >> rd >> label;
-                int offset = symbolTable[label] - currTextAddr; // full byte offset, e.g. 8 or -4
-                string imm = to_string(offset);                 // pass the full offset!
-                machineCode = generateUJType(token, cleanToken(rd), cleanToken(imm));
+                string rd, lbl;
+                ls >> rd >> lbl;
+                int off = lbl_map[lbl] - cur_txt;
+                string imm = to_string(off);
+                mc = enc_uj(tok, rm_comma(rd), rm_comma(imm));
+                string immB = imm_bin(rm_comma(imm), 21);
+                bin_cmt = instrmap_uj[tok] + "-NULL-NULL-" +
+                          reg_bin(rm_comma(rd)) + "-NULL-" + immB;
             }
-
             else
             {
-                if (currStream != &iss)
-                    delete currStream;
+                if (p_ls != &ls)
+                    delete p_ls;
                 continue;
             }
             ostringstream oss;
-            oss << "0x" << hex << currTextAddr << " 0x"
-                << setw(8) << setfill('0') << stoul(machineCode, nullptr, 2)
-                << " , " << l << " # " << machineCode;
-            textOutput.push_back(oss.str());
-            currTextAddr += 4;
+            oss << "0x" << hex << cur_txt << " 0x"
+                << setw(8) << setfill('0') << stoul(mc, nullptr, 2)
+                << " , " << ln << " # " << bin_cmt;
+            txt_lines.push_back(oss.str());
+            cur_txt += 4;
         }
-        else if (currSegment == DATA)
+        else if (cur_seg == seg_dat)
         {
-            if (token == ".byte")
+            // now after it is done,process data directives and convert them into machine code lines.
+            if (tok == ".byte")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (value.empty())
+                    if (v.empty())
                         continue;
-                    unsigned int byteVal = parseDataDirectiveValue(value);
+                    unsigned int bval = parse_val(v);
                     ostringstream oss;
-                    oss << "0x" << hex << currDataAddr << " 0x"
-                        << setw(2) << setfill('0') << byteVal;
-                    dataOutput.push_back(oss.str());
-                    currDataAddr += 1;
+                    oss << "0x" << hex << cur_dat << " 0x"
+                        << setw(2) << setfill('0') << bval;
+                    dat_lines.push_back(oss.str());
+                    cur_dat += 1;
                 }
             }
-            else if (token == ".half")
+            else if (tok == ".half")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (value.empty())
+                    if (v.empty())
                         continue;
-                    unsigned int halfVal = parseDataDirectiveValue(value);
+                    unsigned int hval = parse_val(v);
                     ostringstream oss;
-                    oss << "0x" << hex << currDataAddr << " 0x"
-                        << setw(4) << setfill('0') << halfVal;
-                    dataOutput.push_back(oss.str());
-                    currDataAddr += 2;
+                    oss << "0x" << hex << cur_dat << " 0x"
+                        << setw(4) << setfill('0') << hval;
+                    dat_lines.push_back(oss.str());
+                    cur_dat += 2;
                 }
             }
-            else if (token == ".word")
+            else if (tok == ".word")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (value.empty())
+                    if (v.empty())
                         continue;
-                    unsigned int wordVal = parseDataDirectiveValue(value);
+                    unsigned int wval = parse_val(v);
                     ostringstream oss;
-                    oss << "0x" << hex << currDataAddr << " 0x"
-                        << setw(8) << setfill('0') << wordVal;
-                    dataOutput.push_back(oss.str());
-                    currDataAddr += 4;
+                    oss << "0x" << hex << cur_dat << " 0x"
+                        << setw(8) << setfill('0') << wval;
+                    dat_lines.push_back(oss.str());
+                    cur_dat += 4;
                 }
             }
-            else if (token == ".dword")
+            else if (tok == ".dword")
             {
-                string values;
-                getline(*currStream, values);
-                istringstream issValues(values);
-                string value;
-                while (getline(issValues, value, ','))
+                string vals;
+                getline(*p_ls, vals);
+                istringstream vs(vals);
+                string v;
+                while (getline(vs, v, ','))
                 {
-                    if (value.empty())
+                    if (v.empty())
                         continue;
-                    unsigned long long dwordVal = stoull(value, nullptr, 0);
+                    unsigned long long dval = stoull(v, nullptr, 0);
                     ostringstream oss;
-                    oss << "0x" << hex << currDataAddr << " 0x"
-                        << setw(16) << setfill('0') << dwordVal;
-                    dataOutput.push_back(oss.str());
-                    currDataAddr += 8;
+                    oss << "0x" << hex << cur_dat << " 0x"
+                        << setw(16) << setfill('0') << dval;
+                    dat_lines.push_back(oss.str());
+                    cur_dat += 8;
                 }
             }
-            else if (token == ".asciz")
+            else if (tok == ".asciz")
             {
                 string str;
-                getline(*currStream, str);
-                size_t start = str.find('\"');
-                size_t end = str.rfind('\"');
-                if (start != string::npos && end != string::npos && end > start)
+                getline(*p_ls, str);
+                size_t st = str.find('\"');
+                size_t en = str.rfind('\"');
+                if (st != string::npos && en != string::npos && en > st)
                 {
-                    string content = str.substr(start + 1, end - start - 1);
+                    string content = str.substr(st + 1, en - st - 1);
                     for (char c : content)
                     {
                         ostringstream oss;
-                        oss << "0x" << hex << currDataAddr << " 0x"
+                        oss << "0x" << hex << cur_dat << " 0x"
                             << setw(2) << setfill('0') << (int)c;
-                        dataOutput.push_back(oss.str());
-                        currDataAddr += 1;
+                        dat_lines.push_back(oss.str());
+                        cur_dat += 1;
                     }
-                    // Null terminator.
                     ostringstream oss;
-                    oss << "0x" << hex << currDataAddr << " 0x00";
-                    dataOutput.push_back(oss.str());
-                    currDataAddr += 1;
+                    oss << "0x" << hex << cur_dat << " 0x00";
+                    dat_lines.push_back(oss.str());
+                    cur_dat += 1;
                 }
             }
         }
-        if (currStream != &iss)
-            delete currStream;
+        if (p_ls != &ls)
+            delete p_ls;
     }
 
-    // Write text segment first.
-    for (auto &s : textOutput)
+    // Write the text segment lines to the output file.
+    for (auto &l : txt_lines)
     {
-        output << s << "\n";
+        out << l << "\n";
     }
-    output << "\n"; // Separate segments.
-    for (auto &s : dataOutput)
+    out << "\n";
+    // Write the data segment lines to the output file.
+    for (auto &l : dat_lines)
     {
-        output << s << "\n";
+        out << l << "\n";
     }
+    out.close();
 
-    output.close();
-    cout << "✅ Assembly successfully converted to machine code in output.mc!" << endl;
+    cout << "Successfully converted assembly to machine code in output.mc!" << endl;
     return 0;
 }

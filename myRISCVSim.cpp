@@ -1,13 +1,4 @@
-/* 
 
-The project is developed as part of CS204: Computer Architecture class Project Phase 2 and Phase 3: Functional Simulator for subset of RISCV Processor
-
-Developer's Names:
-Group No:
-Developer's Email ids:
-Date: 
-
-*/
 
 /* myRISCVSim.cpp
    Purpose of this file: Implementation file for myRISCVSim

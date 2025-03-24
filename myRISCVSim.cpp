@@ -1,10 +1,12 @@
 
-
-/* Implementation file for myRISCVSim */
+/* myRISCVSim.cpp
+   Implementation file for myRISCVSim
+*/
 
 #include "myRISCVSim.h"
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 
 #define MEM_SIZE 8192
 #define DATA_OFFSET 0x10000000
@@ -16,11 +18,11 @@ static unsigned char MEM[MEM_SIZE];
 struct Processor {
     unsigned int PC;            // Program Counter
     unsigned int IR;            // Instruction Register
-    unsigned int R[32];         // Register File
+    unsigned int R[32];         // Register file
     unsigned int operand1;      // Temporary operand
     unsigned int operand2;      // Temporary operand
     unsigned int dest_reg;      // Destination register index
-    unsigned int alu_result;    // ALU output
+    unsigned int alu_result;    // ALU result
     unsigned int clock;         // Clock cycle counter
     int skip_pc_increment;      // Flag to skip PC update
     int N, C, V, Z;             // Flags (unused)
@@ -37,20 +39,18 @@ static Processor cpu;
 #define RS2(x)       (((x) >> 20) & 0x1F)
 #define FUNCT7(x)    (((x) >> 25) & 0x7F)
 
-// Runs the simulation loop
 void run_RISCVsim() {
   while (1) {
-    fetch();    // Fetch instruction
-    decode();   // Decode instruction
-    execute();  // Execute instruction
-    mem();      // Memory operation
-    write_back(); // Write results back
+    fetch();
+    decode();
+    execute();
+    mem();
+    write_back();
     cpu.clock++;
     std::printf("Clock Cycle = %u\n\n", cpu.clock);
   }
 }
 
-// Resets processor state and memory
 void reset_proc() {
   for (int i = 0; i < 32; i++)
       cpu.R[i] = 0;
@@ -62,21 +62,24 @@ void reset_proc() {
   cpu.skip_pc_increment = 0;
 }
 
-// Loads the program into memory
+// Minimal change here: load_program_memory now supports comments.
+// It reads each line and uses sscanf to extract the two hex numbers.
 void load_program_memory(char *file_name) {
   FILE *fp = std::fopen(file_name, "r");
   if (fp == nullptr) {
     std::printf("Error opening input mem file\n");
     std::exit(1);
   }
+  char line[256];
   unsigned int address, instruction;
-  while (std::fscanf(fp, "%x %x", &address, &instruction) != EOF) {
-    write_word(reinterpret_cast<char*>(MEM), address, instruction);
+  while (std::fgets(line, sizeof(line), fp) != nullptr) {
+    if (std::sscanf(line, " %x %x", &address, &instruction) == 2) {
+      write_word(reinterpret_cast<char*>(MEM), address, instruction);
+    }
   }
   std::fclose(fp);
 }
 
-// Writes data memory to a file
 void write_data_memory() {
   FILE *fp = std::fopen("data_out.mem", "w");
   if (fp == nullptr) {
@@ -92,7 +95,6 @@ void write_data_memory() {
   std::fclose(fp);
 }
 
-// Exits the simulator and dumps registers
 void swi_exit() {
   write_data_memory();
   std::printf("\n=== REGISTER DUMP ===\n");
@@ -108,21 +110,18 @@ void swi_exit() {
   std::exit(0);
 }
 
-// Fetch stage: get instruction from memory
 void fetch() {
   cpu.IR = read_word(reinterpret_cast<char*>(MEM), cpu.PC);
   std::printf("FETCH: Fetch instruction 0x%08X from address 0x%08X\n", cpu.IR, cpu.PC);
 }
 
-// Decode stage: interpret instruction fields
 void decode() {
   unsigned int opcode = OPCODE(cpu.IR);
   if (cpu.IR == 0xEF000011) {
     std::printf("DECODE: Exit instruction encountered\n");
     swi_exit();
   }
-  // R-type, I-type, Load, Store, Branch, JAL, JALR, LUI, AUIPC handled below...
-  if (opcode == 0x33) { // R-type
+  if (opcode == 0x33) { // R-type instructions
     unsigned int rd = RD(cpu.IR);
     unsigned int funct3 = FUNCT3(cpu.IR);
     unsigned int rs1 = RS1(cpu.IR);
@@ -180,7 +179,7 @@ void decode() {
       std::printf("DECODE: Read R%d = %d, R%d = %d\n", rs1, cpu.operand1, rs2, cpu.operand2);
     }
   }
-  else if (opcode == 0x13) {  // I-type instructions
+  else if (opcode == 0x13) {  // I-type
     unsigned int rd = RD(cpu.IR);
     unsigned int funct3 = FUNCT3(cpu.IR);
     unsigned int rs1 = RS1(cpu.IR);
@@ -223,7 +222,7 @@ void decode() {
        }
     }
   }
-  else if (opcode == 0x03) {  // Load instructions
+  else if (opcode == 0x03) {  // Load
     unsigned int rd = RD(cpu.IR);
     unsigned int funct3 = FUNCT3(cpu.IR);
     unsigned int rs1 = RS1(cpu.IR);
@@ -244,7 +243,7 @@ void decode() {
       std::printf("DECODE: Read base R%d = %d\n", rs1, cpu.operand1);
     }
   }
-  else if (opcode == 0x23) {  // Store instructions
+  else if (opcode == 0x23) {  // Store
     unsigned int imm4_0  = (cpu.IR >> 7) & 0x1F;
     unsigned int funct3  = (cpu.IR >> 12) & 0x07;
     unsigned int rs1     = (cpu.IR >> 15) & 0x1F;
@@ -269,7 +268,7 @@ void decode() {
       std::printf("DECODE: Read R%d = %d, R%d = %d\n", rs1, cpu.operand1, rs2, cpu.operand2);
     }
   }
-  else if (opcode == 0x63) {  // Branch instructions
+  else if (opcode == 0x63) {  // Branch
     unsigned int funct3 = FUNCT3(cpu.IR);
     unsigned int rs1 = RS1(cpu.IR);
     unsigned int rs2 = RS2(cpu.IR);
@@ -336,7 +335,6 @@ void decode() {
   }
 }
 
-// Execute stage: perform ALU operations
 void execute() {
   unsigned int opcode = OPCODE(cpu.IR);
   unsigned int funct3 = FUNCT3(cpu.IR);
@@ -472,7 +470,6 @@ void execute() {
   }
 }
 
-// Memory stage: load/store operations
 void mem() {
   unsigned int opcode = OPCODE(cpu.IR);
   unsigned int funct3 = FUNCT3(cpu.IR);
@@ -506,7 +503,6 @@ void mem() {
   }
 }
 
-// Write-back stage: update register file
 void write_back() {
   unsigned int opcode = OPCODE(cpu.IR);
   if (opcode == 0x33 || opcode == 0x13 || opcode == 0x03 || opcode == 0x17 || opcode == 0x37) {

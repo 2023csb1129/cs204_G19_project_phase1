@@ -1,0 +1,361 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <iomanip>
+#include <unordered_map>
+#include <cstdlib>
+#include <cstring>
+
+#define MEM_SIZE 8192
+#define DATA_OFFSET 0x10000000
+// Branch Predictor Table (1-bit): index by PC >> 2
+#define PRED_SIZE 256
+bool PHT[PRED_SIZE];            // Prediction table (1-bit)
+unsigned int BTB[PRED_SIZE];    // Branch Target Buffer
+
+int control_hazard_count = 0;
+int branch_mispred_count = 0;
+int stalls_due_to_control_hazard = 0;
+
+// Hash function for indexing predictor tables
+int predictor_index(unsigned int pc) {
+    return (pc >> 2) % PRED_SIZE;
+}
+
+
+// Control knobs
+bool KNOB_PIPELINE = true;
+bool KNOB_FORWARDING = false;
+bool KNOB_PRINT_REGS = false;
+bool KNOB_PRINT_PIPELINE = false;
+int  KNOB_TRACE_INSTR = -1;  // e.g. 10 for 10th instruction
+
+unsigned int INSTR_COUNT = 0, CYCLE_COUNT = 0;
+
+// Memory
+unsigned char MEM[MEM_SIZE];
+
+// Utility macros
+#define OPCODE(x)    ((x) & 0x7F)
+#define RD(x)        (((x) >> 7) & 0x1F)
+#define FUNCT3(x)    (((x) >> 12) & 0x7)
+#define RS1(x)       (((x) >> 15) & 0x1F)
+#define RS2(x)       (((x) >> 20) & 0x1F)
+#define FUNCT7(x)    (((x) >> 25) & 0x7F)
+
+struct Processor {
+    unsigned int PC = 0;
+    unsigned int R[32] = {0};
+};
+
+Processor cpu;
+
+// Pipeline registers
+struct IF_ID_Reg {
+    bool valid = false;
+    unsigned int instr = 0;
+    unsigned int pc = 0;
+} IF_ID;
+// Stats
+int stall_count = 0;
+int data_hazard_count = 0;
+int stalls_due_to_data_hazard = 0;
+
+// Simple hazard detection for RAW hazard
+bool detect_data_hazard() {
+    if (!ID_EX.valid) return false;
+
+    // RAW hazard: if ID stage needs rs1 or rs2 that is being written back later
+    unsigned int rs1 = RS1(IF_ID.instr);
+    unsigned int rs2 = RS2(IF_ID.instr);
+    unsigned int rd_EX = ID_EX.rd;
+    unsigned int rd_MEM = EX_MEM.rd;
+
+    bool hazard_rs1 = (rs1 != 0) && (rs1 == rd_EX || rs1 == rd_MEM);
+    bool hazard_rs2 = (rs2 != 0) && (rs2 == rd_EX || rs2 == rd_MEM);
+
+    if ((OPCODE(IF_ID.instr) != 0x63) && (hazard_rs1 || hazard_rs2)) {
+        data_hazard_count++;
+        return true;
+    }
+
+    return false;
+}
+
+// Stall logic by freezing IF and ID stage
+void insert_stall() {
+    stall_count++;
+    stalls_due_to_data_hazard++;
+
+    if (KNOB_PRINT_PIPELINE)
+        std::cout << "[STALL] Data hazard detected, inserting stall\n";
+
+    // Reuse previous IF_ID (do not overwrite with new fetch)
+    IF_ID.valid = false;
+
+    // ID/EX stage also freezes
+    ID_EX.valid = false;
+
+    // PC does not increment (reverse fetch effect)
+    cpu.PC -= 4;
+}
+
+
+struct ID_EX_Reg {
+    bool valid = false;
+    unsigned int instr = 0;
+    unsigned int pc = 0;
+    unsigned int rs1_val = 0, rs2_val = 0;
+    unsigned int rs1 = 0, rs2 = 0;
+    unsigned int rd = 0;
+    int imm = 0;
+    unsigned int opcode = 0;
+} ID_EX;
+
+struct EX_MEM_Reg {
+    bool valid = false;
+    unsigned int instr = 0;
+    unsigned int alu_result = 0;
+    unsigned int rs2_val = 0;
+    unsigned int rd = 0;
+    unsigned int opcode = 0;
+} EX_MEM;
+
+struct MEM_WB_Reg {
+    bool valid = false;
+    unsigned int instr = 0;
+    unsigned int mem_data = 0;
+    unsigned int alu_result = 0;
+    unsigned int rd = 0;
+    unsigned int opcode = 0;
+} MEM_WB;
+
+// Word access
+int read_word(unsigned int address) {
+    int index = (address >= DATA_OFFSET) ? (address - DATA_OFFSET + 4096) : address;
+    return *(int*)(MEM + index);
+}
+
+void write_word(unsigned int address, unsigned int data) {
+    int index = (address >= DATA_OFFSET) ? (address - DATA_OFFSET + 4096) : address;
+    *(int*)(MEM + index) = data;
+}
+
+// Load program
+void load_program_memory(const char* filename) {
+    std::ifstream file(filename);
+    unsigned int addr, instr;
+    while (file >> std::hex >> addr >> instr) {
+        write_word(addr, instr);
+    }
+}
+
+// Fetch stage
+void fetch_stage() {
+    IF_ID.valid = true;
+    IF_ID.pc = cpu.PC;
+    IF_ID.instr = read_word(cpu.PC);
+
+    unsigned int opcode = OPCODE(IF_ID.instr);
+
+    if (opcode == 0x63 || opcode == 0x6F || opcode == 0x67) { // BEQ/BNE/JAL/JALR
+        int index = predictor_index(cpu.PC);
+        bool prediction = PHT[index];
+        unsigned int predicted_target = BTB[index];
+
+        if (KNOB_PRINT_PIPELINE || KNOB_PRINT_REGS || KNOB_TRACE_INSTR == (int)(INSTR_COUNT + 1)) {
+            std::cout << "[BP] Prediction for PC 0x" << std::hex << cpu.PC << ": "
+                      << (prediction ? "TAKEN" : "NOT TAKEN") << ", target = 0x"
+                      << predicted_target << std::endl;
+        }
+
+        // Speculative PC update
+        if (prediction) {
+            cpu.PC = predicted_target;
+        } else {
+            cpu.PC += 4;
+        }
+    } else {
+        cpu.PC += 4;
+    }
+}
+
+// Decode stage (partial)
+void decode_stage() {
+    if (!IF_ID.valid) return;
+
+    ID_EX.valid = true;
+    ID_EX.instr = IF_ID.instr;
+    ID_EX.pc = IF_ID.pc;
+
+    ID_EX.opcode = OPCODE(ID_EX.instr);
+    ID_EX.rd = RD(ID_EX.instr);
+    ID_EX.rs1 = RS1(ID_EX.instr);
+    ID_EX.rs2 = RS2(ID_EX.instr);
+
+    ID_EX.rs1_val = cpu.R[ID_EX.rs1];
+    ID_EX.rs2_val = cpu.R[ID_EX.rs2];
+
+    if (KNOB_PRINT_PIPELINE)
+        std::cout << "[ID] Decoding instr 0x" << std::hex << ID_EX.instr
+                  << ", rs1: R" << std::dec << ID_EX.rs1 << "=" << ID_EX.rs1_val
+                  << ", rs2: R" << ID_EX.rs2 << "=" << ID_EX.rs2_val << std::endl;
+
+    // Placeholder for IMM extraction
+    if (ID_EX.opcode == 0x13 || ID_EX.opcode == 0x03) {
+        ID_EX.imm = (int)(ID_EX.instr >> 20);  // I-type
+    }
+    // Forwarding logic inside decode_stage()
+if (KNOB_FORWARDING) {
+    if (ID_EX.rs1 == EX_MEM.rd && EX_MEM.valid && EX_MEM.rd != 0)
+        ID_EX.rs1_val = EX_MEM.alu_result;
+
+    if (ID_EX.rs2 == EX_MEM.rd && EX_MEM.valid && EX_MEM.rd != 0)
+        ID_EX.rs2_val = EX_MEM.alu_result;
+
+    if (ID_EX.rs1 == MEM_WB.rd && MEM_WB.valid && MEM_WB.rd != 0)
+        ID_EX.rs1_val = (MEM_WB.opcode == 0x03) ? MEM_WB.mem_data : MEM_WB.alu_result;
+
+    if (ID_EX.rs2 == MEM_WB.rd && MEM_WB.valid && MEM_WB.rd != 0)
+        ID_EX.rs2_val = (MEM_WB.opcode == 0x03) ? MEM_WB.mem_data : MEM_WB.alu_result;
+}
+
+}
+
+// Execute
+    // Control hazard detection
+    if (ID_EX.opcode == 0x63 || ID_EX.opcode == 0x6F || ID_EX.opcode == 0x67) {
+        control_hazard_count++;
+
+        bool taken = false;
+        unsigned int actual_target = 0;
+
+        if (ID_EX.opcode == 0x63) {  // BEQ, BNE
+            unsigned int funct3 = FUNCT3(ID_EX.instr);
+            int imm = ((ID_EX.instr >> 31) & 0x1) << 12 |
+                      ((ID_EX.instr >> 25) & 0x3F) << 5 |
+                      ((ID_EX.instr >> 8) & 0xF) << 1 |
+                      ((ID_EX.instr >> 7) & 0x1) << 11;
+            if (imm & 0x1000) imm |= 0xFFFFE000;
+
+            if ((funct3 == 0x0 && ID_EX.rs1_val == ID_EX.rs2_val) ||  // BEQ
+                (funct3 == 0x1 && ID_EX.rs1_val != ID_EX.rs2_val))    // BNE
+            {
+                taken = true;
+                actual_target = ID_EX.pc + imm;
+            } else {
+                taken = false;
+                actual_target = ID_EX.pc + 4;
+            }
+        } else if (ID_EX.opcode == 0x6F) {  // JAL
+            taken = true;
+            int imm = ((ID_EX.instr >> 31) & 0x1) << 20 |
+                      ((ID_EX.instr >> 21) & 0x3FF) << 1 |
+                      ((ID_EX.instr >> 20) & 0x1) << 11 |
+                      ((ID_EX.instr >> 12) & 0xFF) << 12;
+            if (imm & (1 << 20)) imm |= 0xFFF00000;
+            actual_target = ID_EX.pc + imm;
+        } else if (ID_EX.opcode == 0x67) {  // JALR
+            taken = true;
+            int imm = (ID_EX.instr >> 20) & 0xFFF;
+            actual_target = (ID_EX.rs1_val + imm) & ~1;
+        }
+
+        // Prediction outcome
+        int index = predictor_index(ID_EX.pc);
+        bool predicted = PHT[index];
+        unsigned int predicted_target = BTB[index];
+
+        if (predicted != taken || predicted_target != actual_target) {
+            branch_mispred_count++;
+
+            if (KNOB_PRINT_PIPELINE)
+                std::cout << "[BP] MISPREDICTION! Flushing pipeline at PC = 0x" << std::hex << ID_EX.pc << std::endl;
+
+            // Flush pipeline
+            IF_ID.valid = false;
+            ID_EX.valid = false;
+
+            // Restart from actual target
+            cpu.PC = actual_target;
+
+            stalls_due_to_control_hazard++;
+        }
+
+        // Update predictor
+        PHT[index] = taken;
+        BTB[index] = actual_target;
+    }
+
+// Memory
+void memory_stage() {
+    if (!EX_MEM.valid) return;
+
+    MEM_WB.valid = true;
+    MEM_WB.instr = EX_MEM.instr;
+    MEM_WB.rd = EX_MEM.rd;
+    MEM_WB.opcode = EX_MEM.opcode;
+
+    if (EX_MEM.opcode == 0x03) {
+        MEM_WB.mem_data = read_word(EX_MEM.alu_result);
+        if (KNOB_PRINT_PIPELINE)
+            std::cout << "[MEM] Loaded " << MEM_WB.mem_data << " from " << EX_MEM.alu_result << std::endl;
+    } else if (EX_MEM.opcode == 0x23) {
+        write_word(EX_MEM.alu_result, EX_MEM.rs2_val);
+        if (KNOB_PRINT_PIPELINE)
+            std::cout << "[MEM] Stored " << EX_MEM.rs2_val << " at " << EX_MEM.alu_result << std::endl;
+    }
+
+    MEM_WB.alu_result = EX_MEM.alu_result;
+}
+
+// Write-back
+void write_back_stage() {
+    if (!MEM_WB.valid) return;
+
+    if (MEM_WB.opcode == 0x33 || MEM_WB.opcode == 0x13)
+        cpu.R[MEM_WB.rd] = MEM_WB.alu_result;
+    else if (MEM_WB.opcode == 0x03)
+        cpu.R[MEM_WB.rd] = MEM_WB.mem_data;
+
+    if (KNOB_PRINT_PIPELINE)
+        std::cout << "[WB] Wrote " << cpu.R[MEM_WB.rd] << " to R" << MEM_WB.rd << std::endl;
+}
+
+// Main simulator loop
+void run_pipeline_simulator() {
+    while (true) {
+        CYCLE_COUNT++;
+
+        write_back_stage();
+        memory_stage();
+        execute_stage();
+
+        // Detect and handle hazard *before* decode
+        bool hazard = false;
+        if (KNOB_PIPELINE && !KNOB_FORWARDING) {
+            hazard = detect_data_hazard();
+            if (hazard) insert_stall();
+        }
+
+        // If not stalled, proceed
+        if (!hazard) decode_stage();
+        fetch_stage();
+
+        if (IF_ID.instr == 0xEF000011 || ID_EX.instr == 0xEF000011)
+            break;
+    }
+
+    std::cout << "\nSimulation completed in " << CYCLE_COUNT << " cycles.\n";
+    std::cout << "Instructions executed: " << INSTR_COUNT << "\n";
+    std::cout << "Stalls inserted: " << stall_count << "\n";
+    std::cout << "Data hazards: " << data_hazard_count << "\n";
+    std::cout << "Stalls due to data hazards: " << stalls_due_to_data_hazard << "\n";
+    std::cout << "CPI = " << std::fixed << std::setprecision(2) << (float)CYCLE_COUNT / (INSTR_COUNT + 1) << "\n";
+        std::cout << "Control hazards: " << control_hazard_count << "\n";
+    std::cout << "Branch mispredictions: " << branch_mispred_count << "\n";
+    std::cout << "Stalls due to control hazards: " << stalls_due_to_control_hazard << "\n";
+
+}
+
